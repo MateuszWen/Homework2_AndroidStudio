@@ -5,11 +5,21 @@ import androidx.fragment.app.FragmentActivity;
 
 import android.Manifest;
 import android.annotation.SuppressLint;
+import android.content.Context;
 import android.content.pm.PackageManager;
+import android.graphics.Color;
+import android.hardware.Sensor;
+import android.hardware.SensorEvent;
+import android.hardware.SensorEventListener;
+import android.hardware.SensorManager;
 import android.location.Location;
 import android.os.Bundle;
 import android.util.Log;
+import android.view.Gravity;
 import android.view.View;
+import android.view.animation.Animation;
+import android.view.animation.AnimationUtils;
+import android.widget.TextView;
 
 import com.google.android.gms.location.FusedLocationProviderClient;
 import com.google.android.gms.location.LocationCallback;
@@ -40,25 +50,39 @@ import java.lang.reflect.Type;
 import java.util.ArrayList;
 import java.util.List;
 
-public class MapsActivity extends FragmentActivity implements OnMapReadyCallback, GoogleMap.OnMapLoadedCallback, GoogleMap.OnMarkerClickListener, GoogleMap.OnMapLongClickListener {
+public class MapsActivity extends FragmentActivity implements OnMapReadyCallback, GoogleMap.OnMapLoadedCallback, GoogleMap.OnMarkerClickListener, GoogleMap.OnMapLongClickListener, SensorEventListener {
 
-    private GoogleMap mMap; //przechowuje aktualnie załadowaną mapę
+    private GoogleMap mMap; //przechowuje aktualnie załadowaną mapę (tak, tę która widzimy na ekranie)
     private static final int MY_PERMISSION_REQUEST_ACCESS_FINE_LOCATION = 101;
     private FusedLocationProviderClient fusedLocationClient;  // dostarcza dostęp do serwisu lokalizacji
     private LocationRequest mLocationRequest;  // dostarcza informacji o aktualizacji seriwsu lokalizacji (czyli chyba tego co wyżej)
     private LocationCallback locationCallback; // przechowuje aktualizacje tego co ogranął wyżej (tego mLocationRequest)
     Marker gpsMarker = null; //pokazuje aktualną pozycję urządzenia
 
-    private final String POSITIONS_JSON_FILE = "positions5.json"; //positions saved in Json format
+    static public SensorManager mSensorManager; // <-- manager do obsługi Sensorów
+    static Sensor sensor; // <-- tej wartości będzie przypisany Akcelerometr
 
+    private final String POSITIONS_JSON_FILE = "positions.json"; //positions saved in Json format (Json file)
 
-    private List<MarkerJson> markerList;
-    private List<MarkerJsonString> markerListString;
+    private List<LatLng> markerList;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+
+        // Code above hide 2 floatButtons and textView
         setContentView(R.layout.activity_main);
+        View but1 = findViewById(R.id.floatingActionButton_startAccelerometer);
+        but1.setVisibility(View.GONE);
+        View but2 = findViewById(R.id.floatingActionButton_hideAccelerometer2);
+        but2.setVisibility(View.GONE);
+        View textView = findViewById(R.id.textView);
+        textView.setVisibility(View.GONE);
+
+        //Inicjalization sensor - accelerometr
+        mSensorManager = (SensorManager) getSystemService(Context.SENSOR_SERVICE);
+        sensor = mSensorManager.getDefaultSensor(Sensor.TYPE_ACCELEROMETER);
+
         // Obtain the SupportMapFragment and get notified when the map is ready to be used.
         SupportMapFragment mapFragment = (SupportMapFragment) getSupportFragmentManager().findFragmentById(R.id.map);
         mapFragment.getMapAsync(this); //obiekt GoogleMap jest inicjalizowany za pomoca getMapAsync ... "that will trigger a onMapReady call when the Map is ready"
@@ -67,26 +91,34 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         fusedLocationClient = LocationServices.getFusedLocationProviderClient(this); //jest tworzony by uzyskać dostęp do LocationServices.
 
         markerList = new ArrayList<>(); //Initialize markerList
-        markerListString = new ArrayList<>(); //Initialize markerList
-
-
-        // Log.d("ROZMIAR", String.valueOf(markerList.size()));
-
-        restoreFromJson();
-
-        //Log.d("HEJ", String.valueOf(markerList.size()));
-
-        //if(markerList.size() != 0) {
-            for (MarkerJsonString ml : markerListString) {
-                mMap.addMarker(new MarkerOptions()
-                        .position(new LatLng(Double.parseDouble(ml.X), Double.parseDouble(ml.Y)))
-                        .icon(BitmapDescriptorFactory.fromResource(R.drawable.marker2))
-                        .alpha(0.8f)
-                        .title(String.format("Position:(%.2f, %.2f)", Double.parseDouble(ml.X), Double.parseDouble(ml.Y))));
-            }
-        //}
     }
 
+    @Override
+    //metoda wywoływana jest za każdym razem kiedy Sensor (a w tym konkretnym programie Akcelerometr zarejestruje jakąkolwiek zmianę)
+    public void onSensorChanged(SensorEvent event){
+        if(startStop == true){
+            TextView textView = findViewById(R.id.textView);
+            textView.setTextColor(Color.WHITE);
+            //Create display information
+            StringBuilder stringBuilder = new StringBuilder();
+            stringBuilder.append("Accelerometr:\n");
+            stringBuilder.append(String.format("X: %4f\r\r\r", event.values[0]));
+            stringBuilder.append(String.format("Y: %4f\n", event.values[1]));
+            String text = stringBuilder.toString();
+            textView.setGravity(Gravity.CENTER);
+            textView.setText(text);
+        }
+    }
+
+    @Override
+    public void onAccuracyChanged(Sensor sensor, int accuracy) {
+    }
+
+    @Override
+    protected void onResume() {
+        super.onResume();
+        mSensorManager.registerListener((SensorEventListener) this, sensor, SensorManager.SENSOR_DELAY_NORMAL);
+    }
 
     /**
      * Manipulates the map once available.
@@ -97,13 +129,25 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
      * it inside the SupportMapFragment. This method will only be triggered once the user has
      * installed Google Play services and returned to the app.
      */
+
     @Override
+    //inicjuje możliwość używania wszelkich metod (w tym np. onMapLongClick), dodaje tzw. "listenery" czyli słuchacze, które kiedy stanie się określona dla nich czynnośc na ekranie mapy - zostaną wywołane
     public void onMapReady(GoogleMap googleMap) {
         mMap = googleMap;
         //poniższe linie ustawiają, że MapsActivity będzie handlerem map loader, marker client i map long click events
         mMap.setOnMapLoadedCallback(this);
         mMap.setOnMarkerClickListener(this);
         mMap.setOnMapLongClickListener(this);
+
+        //stawianie znaczników odczytanych z pliku Json nie może odbywac się w onCreate, ponieważ obiekt mapy jest inicjalizowany dopiero w TEJ metodzie za pomoca polecenia " mMap = googleMap "
+        restoreFromJson();
+        for (LatLng ml : markerList) {
+            mMap.addMarker(new MarkerOptions()
+                    .position(ml)
+                    .icon(BitmapDescriptorFactory.fromResource(R.drawable.marker2))
+                    .alpha(0.8f)
+                    .title(String.format("Position:(%.2f, %.2f)", ml.latitude, ml.latitude)));
+        }
     }
 
     private void createLocationRequest(){
@@ -178,70 +222,41 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
     protected void onPause(){
         super.onPause();
         stopLocationUpdates();
+        mSensorManager.unregisterListener(this); //<- odrejestrowanie sensor managera
     }
 
-    //poniższa metoda z tego co rozumiem zatrzymuje dalsze aktualizaowanie położenia
+    //poniższa metoda z tego co rozumiem zatrzymuje dalsze aktualizaowanie położenia (połozenia urządzenia)
     private void stopLocationUpdates(){
         if(locationCallback != null){
             fusedLocationClient.removeLocationUpdates(locationCallback);
         }
     }
 
-
-    //metoda pozwala na dodawanie znaczników na mapie po dłuższym przytrzymaniu palca w danym miejscu na mapie,
     @Override
-    public void onMapLongClick(LatLng latLng) {
-        //float distance = 0f;
-
-        if(markerList.size() > 0){
-            //If the markerList is not empty, calculate the distance between long click position and the last element of the marker list
-            //Marker lastMarker = markerList.get(markerList.size() - 1);
-            //float [] tmpDis = new float[3];
-            //Calculate the distance between two points
-            //Location.distanceBetween(lastMarker.getPosition().latitude, lastMarker.getPosition().longitude, latLng.latitude, latLng.longitude, tmpDis);
-            //the distance is provided at index 0 of the tmpDis array
-            //distance = tmpDis[0];
-
-            //Create a blue line between the two points
-            /*PolylineOptions rectOptions = new PolylineOptions()
-                    .add(lastMarker.getPosition())
-                    .add(latLng)
-                    .width(10)
-                    .color(Color.BLUE);
-            mMap.addPolyline(rectOptions);*/
-        }
-        //Add a custom marker at the position of the long click
-        Marker marker = mMap.addMarker(new MarkerOptions()
-        .position(new LatLng(latLng.latitude, latLng.longitude))
-        .icon(BitmapDescriptorFactory.fromResource(R.drawable.marker2))
-        .alpha(0.8f)
-        .title(String.format("Position:(%.2f, %.2f)", latLng.latitude, latLng.longitude)));
-        //Add the marker to the list
-        markerList.add(new MarkerJson(latLng.latitude, latLng.longitude)); //<-- adding to list for programm
-        markerListString.add(new MarkerJsonString(Double.toString(latLng.latitude), Double.toString(latLng.longitude))); // <-- adding to list for Json
-
-        Log.d("HEJ", String.valueOf(markerList.size()));
-
-        savePositionToJson();
-
-        Log.d("HEJ", String.valueOf(markerList.size()));
-        Log.d("HEJ", "Wyszedłem z opcji zapisywania do Json - savePositionToJson()");
-    }
-
-    @Override
+    //metoda obsługująca kliknięcie w marker
     public boolean onMarkerClick(Marker marker) {
-        //Zoom the map on the marker
-       /* CameraPosition cameraPos = mMap.getCameraPosition();
-        if(cameraPos.zoom < 14f)
-            mMap.moveCamera(CameraUpdateFactory.zoomTo(14f));*/
+        //ustawia na widoczne przyciski floatButton1
+        View but1 = findViewById(R.id.floatingActionButton_startAccelerometer);
+        Animation animationBut1 = AnimationUtils.loadAnimation(this, R.anim.blink);
+        but1.startAnimation(animationBut1);
+        but1.setVisibility(View.VISIBLE);
+
+        //ustawia na widoczne przyciski floatButton2
+        View but2 = findViewById(R.id.floatingActionButton_hideAccelerometer2);
+        Animation animationBut2 = AnimationUtils.loadAnimation(this, R.anim.blink);
+        but2.startAnimation(animationBut2);
+        but2.setVisibility(View.VISIBLE);
+
         return false;
     }
 
+    //przybliżenie widoku na mapie za pomocą "lupy"
     public void zoomInClick(View view) {
         //Zoom in the map by 1
         mMap.moveCamera(CameraUpdateFactory.zoomIn());
     }
 
+    //oddalenie widoku na mapie za pomocą "lupy"
     public void zoomOutClick(View view) {
         //Zoom out the map by 1
         mMap.moveCamera(CameraUpdateFactory.zoomOut());
@@ -249,20 +264,16 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
 
     @Override
     protected void onDestroy() {
-        Log.d("zamykam", "TUDU");
-        savePositionToJson();
-        Log.d("zamykam", "TUDU");
         super.onDestroy();
-
     }
 
     //metoda zapisuje dane w pliku w formie pliku JSON
     private void savePositionToJson(){
         Gson gson = new Gson();
-        String listJson = gson.toJson(markerListString);
+        String listJson = gson.toJson(markerList);
         FileOutputStream outputStream;
         try{
-            outputStream = openFileOutput(POSITIONS_JSON_FILE, MODE_APPEND);
+            outputStream = openFileOutput(POSITIONS_JSON_FILE, MODE_PRIVATE);
             FileWriter writer = new FileWriter(outputStream.getFD());
             writer.write(listJson);
             writer.close();
@@ -287,22 +298,18 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
             int n;
             StringBuilder builder = new StringBuilder();
             while((n = reader.read(buf)) >= 0){
-
-
                 String tmp = String.valueOf(buf);
                 String substring = (n<DEFAULT_BUFFER_SIZE) ? tmp.substring(0, n) : tmp;
                 builder.append(substring);
             }
             reader.close();
             readJson = builder.toString();
-            Type collectionType = new TypeToken<List<MarkerJsonString>>(){}.getType();
-            List<MarkerJsonString> o = gson.fromJson(readJson, collectionType);
+            Type collectionType = new TypeToken<List<LatLng>>(){}.getType();
+            List<LatLng> o = gson.fromJson(readJson, collectionType);
             if(o != null){
-                markerListString.clear();
                 markerList.clear();
-                for(MarkerJsonString position : o){
-                    markerListString.add(position);
-                    markerList.add(new MarkerJson(Double.parseDouble(position.X), Double.parseDouble(position.Y)));
+                for(LatLng position : o){
+                    markerList.add(new LatLng(position.latitude, position.longitude));
                 }
             }
         } catch (FileNotFoundException e){
@@ -312,24 +319,87 @@ public class MapsActivity extends FragmentActivity implements OnMapReadyCallback
         }
     }
 
-    public class MarkerJson{
+    @Override
+    //metoda pozwala na dodawanie znaczników na mapie po dłuższym przytrzymaniu palca w danym miejscu na mapie,
+    public void onMapLongClick(LatLng latLng) {
 
-        private double X;
-        private double Y;
+        //Add a custom marker at the position of the long click
+        Marker marker = mMap.addMarker(new MarkerOptions()
+                .position(new LatLng(latLng.latitude, latLng.longitude))
+                .icon(BitmapDescriptorFactory.fromResource(R.drawable.marker2))
+                .alpha(0.8f)
+                .title(String.format("Position:(%.2f, %.2f)", latLng.latitude, latLng.longitude)));
 
-        public MarkerJson(double X, double Y){
-            this.X = X;
-            this.Y = Y;
+        markerList.add(latLng); //<-- adding to list for programm
+
+        savePositionToJson(); // <--zapisywanie nowego znacznika do pliku Json
+    }
+
+    //metoda obsługująca przycisk "Clear Memory"
+    public void onClickClearMemoryButton(View view) {
+        markerList.clear(); //<-- czyszczenie markerList
+        savePositionToJson(); //<-- metoda nadpisze plik Json uprzednio wyczyszczoną listą
+        mMap.clear(); //<-- mMap jest obiektem reprezentującym widoczną dla użytkownika mapę, mMap.clear() czyści mapę z znaczników
+
+        View but1 = findViewById(R.id.floatingActionButton_startAccelerometer);
+        View but2 = findViewById(R.id.floatingActionButton_hideAccelerometer2);
+        View textView = findViewById(R.id.textView);
+        //jeżeli któryś z floatButton lub textView był widoczny podczas wywołania metody onClickClearMemoryButton, zposzczególny if go schowa z animacją
+        if(but1.getVisibility() == View.VISIBLE) {
+            Animation animationBut1 = AnimationUtils.loadAnimation(this, R.anim.blink2);
+            but1.startAnimation(animationBut1);
+            but1.setVisibility(View.GONE);
+        }
+        if(but2.getVisibility() == View.VISIBLE) {
+            Animation animationBut2 = AnimationUtils.loadAnimation(this, R.anim.blink2);
+            but2.startAnimation(animationBut2);
+            but2.setVisibility(View.GONE);
+        }
+        if(textView.getVisibility() == View.VISIBLE){
+            Animation animationTextView = AnimationUtils.loadAnimation(this, R.anim.blink2);
+            textView.startAnimation(animationTextView);
+            textView.setVisibility(View.GONE);
+        }
+
+        onMapReady(mMap); //<-- metoda ma za zadanie inicjowanie mapy na ekranie, jeżeli wyczyścimy uprzednio mapę i prekażemy ją do metody, wtedy stara mapa z znacznikami zostanie "zastąpiona" nową bez znaczników
+    }
+
+    //service floatingButtonStartAccelerometer
+    boolean startStop = false;
+    public void onClickStartAccelerometer(View view) {
+        if(startStop == false){
+            startStop = true;
+            View textView = findViewById(R.id.textView);
+            Animation animationTextView = AnimationUtils.loadAnimation(this, R.anim.blink);
+            textView.startAnimation(animationTextView);
+            textView.setVisibility(View.VISIBLE);
+        }else{
+            startStop = false;
+            View textView = findViewById(R.id.textView);
+            Animation animationTextView = AnimationUtils.loadAnimation(this, R.anim.blink2);
+            textView.startAnimation(animationTextView);
+            textView.setVisibility(View.GONE);
         }
     }
-    public class MarkerJsonString{
 
-        private String X;
-        private String Y;
+    //obsługa floatingButton chowania przycisków i textView
+    public void onClickHideAccelerometer(View view) {
+        View but1 = findViewById(R.id.floatingActionButton_startAccelerometer);
+        Animation animationBut1 = AnimationUtils.loadAnimation(this, R.anim.blink2);
+        but1.startAnimation(animationBut1);
+        but1.setVisibility(View.GONE);
 
-        public MarkerJsonString(String X, String Y){
-            this.X = X;
-            this.Y = Y;
+        View but2 = findViewById(R.id.floatingActionButton_hideAccelerometer2);
+        Animation animationBut2 = AnimationUtils.loadAnimation(this, R.anim.blink2);
+        but2.startAnimation(animationBut2);
+        but2.setVisibility(View.GONE);
+
+        View textView = findViewById(R.id.textView);
+        //textView może być akurat widoczny lub niewidoczny (zależy czy w trakcie zamykanie był robiony pomiar), jeżeli widoczny to również zostanie zamknięty z pomocą animacji
+        if(textView.getVisibility() == View.VISIBLE) {
+            Animation animationTextView = AnimationUtils.loadAnimation(this, R.anim.blink2);
+            textView.startAnimation(animationTextView);
+            textView.setVisibility(View.GONE);
         }
     }
 }
